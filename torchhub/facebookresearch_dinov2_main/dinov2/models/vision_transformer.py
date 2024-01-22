@@ -64,6 +64,7 @@ class DinoVisionTransformer(nn.Module):
         ffn_layer="mlp",
         block_chunks=1,
     ):
+        print("Test")
         """
         Args:
             img_size (int, tuple): input image size
@@ -269,6 +270,9 @@ class DinoVisionTransformer(nn.Module):
         return_class_token: bool = False,
         norm=True,
     ) -> Tuple[Union[torch.Tensor, Tuple[torch.Tensor]]]:
+        
+        print("hello world")
+        
         if self.chunked_blocks:
             outputs = self._get_intermediate_layers_chunked(x, n)
         else:

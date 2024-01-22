@@ -273,10 +273,20 @@ class DinoVisionTransformer(nn.Module):
         # If n is an int, take the n last blocks. If it's a list, take them
         output, total_block_len = [], len(self.blocks)
         blocks_to_take = range(total_block_len - n, total_block_len) if isinstance(n, int) else n
+
+        print("Blocks to take:", blocks_to_take)
+
+        print("Shape of initial patch embeddings:", x.shape)
+        print("First values of initial patch embeddings:", x[0,:3,:3])
+
         for i, blk in enumerate(self.blocks):
             x = blk(x)
             if i in blocks_to_take:
                 output.append(x)
+
+                print("Shape of features after layer", i, ":", x.shape)
+                print("First values of features after layer", i, ":", x[0, :3, :3])
+
         assert len(output) == len(blocks_to_take), f"only {len(output)} / {len(blocks_to_take)} blocks found"
         return output
 
@@ -302,12 +312,18 @@ class DinoVisionTransformer(nn.Module):
         return_class_token: bool = False,
         norm=True,
     ) -> Tuple[Union[torch.Tensor, Tuple[torch.Tensor]]]:
+        print("hello world")
         if self.chunked_blocks:
             outputs = self._get_intermediate_layers_chunked(x, n)
         else:
             outputs = self._get_intermediate_layers_not_chunked(x, n)
         if norm:
             outputs = [self.norm(out) for out in outputs]
+
+        print("Backbone features after layernorm:")
+        for i in outputs:
+            print(i.shape)
+
         class_tokens = [out[:, 0] for out in outputs]
         outputs = [out[:, 1 + self.num_register_tokens:] for out in outputs]
         if reshape:

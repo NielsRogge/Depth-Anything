@@ -71,6 +71,7 @@ def dinov2_vits14(*, pretrained: bool = True, weights: Union[Weights, str] = Wei
     """
     DINOv2 ViT-S/14 model (optionally) pretrained on the LVD-142M dataset.
     """
+    print("TEST")
     return _make_dinov2_model(arch_name="vit_small", pretrained=pretrained, weights=weights, **kwargs)
 
 

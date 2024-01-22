@@ -219,6 +219,8 @@ class NormalizeImage(object):
     def __call__(self, sample):
         sample["image"] = (sample["image"] - self.__mean) / self.__std
 
+        print("Mean of image after normalization: ", np.mean(sample["image"]))
+
         return sample
 
 

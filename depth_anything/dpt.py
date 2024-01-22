@@ -1,8 +1,14 @@
+import argparse
+
 import torch
 import torch.nn as nn
 
-from .blocks import FeatureFusionBlock, _make_scratch
+from blocks import FeatureFusionBlock, _make_scratch
 import torch.nn.functional as F
+
+import cv2
+from torchvision.transforms import Compose
+from util.transform import Resize, NormalizeImage, PrepareForNet
 
 
 def _make_fusion_block(features, use_bn, size = None):
@@ -99,6 +105,7 @@ class DPTHead(nn.Module):
             )
             
     def forward(self, out_features, patch_h, patch_w):
+
         out = []
         for i, x in enumerate(out_features):
             if self.use_clstoken:
@@ -109,7 +116,7 @@ class DPTHead(nn.Module):
                 x = x[0]
             
             x = x.permute(0, 2, 1).reshape((x.shape[0], x.shape[-1], patch_h, patch_w))
-            
+
             x = self.projects[i](x)
             x = self.resize_layers[i](x)
             
@@ -121,15 +128,54 @@ class DPTHead(nn.Module):
         layer_2_rn = self.scratch.layer2_rn(layer_2)
         layer_3_rn = self.scratch.layer3_rn(layer_3)
         layer_4_rn = self.scratch.layer4_rn(layer_4)
+
+        # print("Shape of layer_1_rn after reassemble + convs:", layer_1_rn.shape)
+        # print("First values of layer_1_rn after reassemble + convs:", layer_1_rn[0, 0, :3, :3])
+
+        # print("Shape of layer_4_rn after reassemble + convs:", layer_4_rn.shape)
+        # print("First values of layer_4_rn after reassemble + convs:", layer_4_rn[0, 0, :3, :3])
+
+        print("INSIDE FUSION:")
+        
+        print("Shape of hidden states before feature fusion:", layer_4_rn.shape)
+        print("First values before fusion:", layer_4_rn[0, 0, :3, :3])
         
         path_4 = self.scratch.refinenet4(layer_4_rn, size=layer_3_rn.shape[2:])
+
+        # print("Shape of hidden states after feature fusion:", path_4.shape)
+        # print("First values after fusion:", path_4[0, 0, :3, :3])
+
+        print("SECOND FUSION")
+        print("size:", layer_2_rn.shape[2:])
+
         path_3 = self.scratch.refinenet3(path_4, layer_3_rn, size=layer_2_rn.shape[2:])
+
+        print("Shape of path_3 features after feature fusion:", path_3.shape)
+        print("First values after second fusion:", path_3[0, 0, :3, :3])
+
         path_2 = self.scratch.refinenet2(path_3, layer_2_rn, size=layer_1_rn.shape[2:])
         path_1 = self.scratch.refinenet1(path_2, layer_1_rn)
+
+        print("Output after feature fusion:", path_1.shape)
+        print("First values after feature fusion:", path_1[0, 0, :3, :3])
+
+        # print("Shape of fused hidden states:")
+        # print(path_4.shape)
+        # print("First values of first fused hidden state:", path_4[0, 0, :3, :3])
+        # print(path_3.shape)
+        # print(path_2.shape)
+        # print(path_1.shape)
         
         out = self.scratch.output_conv1(path_1)
+
+        print("Shape after output_conv1:", out.shape)
+        print("First values after output_conv1:", out[0, 0, :3, :3])
+
         out = F.interpolate(out, (int(patch_h * 14), int(patch_w * 14)), mode="bilinear", align_corners=True)
         out = self.scratch.output_conv2(out)
+
+        print("Shape after output_conv2:", out.shape)
+        print("First values after output_conv2:", out[0, 0, :3, :3])
         
         return out
         
@@ -165,6 +211,84 @@ class DPT_DINOv2(nn.Module):
 
 
 if __name__ == '__main__':
-    depth_anything = DPT_DINOv2()
-    depth_anything.load_state_dict(torch.load('checkpoints/depth_anything_dinov2_vitl14.pth'))
+    parser = argparse.ArgumentParser()
+    
+    # Required parameters
+    parser.add_argument(
+        "--size",
+        default="small",
+        type=str,
+        choices=["small", "base", "large"],
+        help="Name of the model you'd like to convert.",
+    )
+    args = parser.parse_args()
+    size = args.size
+
+    from huggingface_hub import hf_hub_download
+
+    if size == "small":
+        depth_anything = DPT_DINOv2(encoder='vits', features=64, out_channels=[48, 96, 192, 384]).eval()
+        filepath = hf_hub_download(
+            repo_id="LiheYoung/Depth-Anything", filename="checkpoints/depth_anything_vits14.pth", repo_type="space"
+        )
+    elif size == "base":
+        depth_anything = DPT_DINOv2(encoder='vitb', features=128, out_channels=[96, 192, 384, 768]).eval()
+        filepath = hf_hub_download(
+            repo_id="LiheYoung/Depth-Anything", filename="checkpoints/depth_anything_vitb14.pth", repo_type="space"
+        )
+    elif size == "large":
+        depth_anything = DPT_DINOv2(encoder='vitl', features=256, out_channels=[256, 512, 1024, 1024]).eval()
+        filepath = hf_hub_download(
+            repo_id="LiheYoung/Depth-Anything", filename="checkpoints/depth_anything_vitl14.pth", repo_type="space"
+        )
+
+    state_dict = torch.load(filepath, map_location="cpu")
+    depth_anything.load_state_dict(state_dict)
+
+    # load image
+    from PIL import Image
+    import requests
+
+    url = 'http://images.cocodataset.org/val2017/000000039769.jpg'
+    image = Image.open(requests.get(url, stream=True).raw).convert("RGB")
+
+    # predict depth
+    import numpy as np
+
+    original_transform = Compose([
+        Resize(
+            width=518,
+            height=518,
+            resize_target=False,
+            keep_aspect_ratio=True,
+            ensure_multiple_of=14,
+            resize_method='lower_bound',
+            image_interpolation_method=cv2.INTER_CUBIC,
+        ),
+        NormalizeImage(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        PrepareForNet(),
+    ])
+
+    original_pixel_values = original_transform({'image': np.array(image)})["image"]
+    original_pixel_values = torch.from_numpy(original_pixel_values).unsqueeze(0)
+    print("Shape of original pixel values:", original_pixel_values.shape)
+    print("Mean of original pixel values:", original_pixel_values.mean())
+
+    import torchvision.transforms as T
+
+    transform = T.Compose(
+        [
+            T.Resize((518, 518), interpolation=Image.BICUBIC),
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
+
+    image = transform(image).unsqueeze(0)
+
+    print(image.shape)
+
+    depth = depth_anything(image)
+
+    print(depth.shape)
     
